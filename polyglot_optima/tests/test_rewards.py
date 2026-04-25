@@ -54,33 +54,85 @@ def make_state(**overrides):
 
 # ---------- Composers ----------
 
-def test_sequential_passes_through_last():
+def test_sequential_returns_last_non_gate_score():
+    """Sequential with no Gate children returns the last child's score directly (gate_product=1)."""
     state = make_state()
     sub = {"compile_status": "success", "correctness_pass_rate": 0.9, "adversarial_pass_rate": 0.95, "speedup": 5.0}
     seq = Sequential(CorrectnessRubric())
     assert seq.score(state, sub) == pytest.approx(0.9, abs=1e-3)
 
 
-def test_sequential_short_circuits_on_gate():
+def test_sequential_short_circuits_on_dead_floor():
+    """Below dead_floor (0.3 default) the graduated gate raises and Sequential returns 0."""
     state = make_state()
-    sub = {"compile_status": "success", "correctness_pass_rate": 0.4, "adversarial_pass_rate": 0.95, "speedup": 5.0}
+    sub = {"compile_status": "success", "correctness_pass_rate": 0.1, "adversarial_pass_rate": 0.95, "speedup": 5.0}
     seq = Sequential(Gate(CorrectnessRubric(), threshold=0.6), CorrectnessRubric())
     assert seq.score(state, sub) == 0.0
 
 
-def test_gate_raises_below_threshold():
+def test_sequential_partial_credit_in_ramp_zone():
+    """Between dead_floor (0.3) and threshold (0.6), gate gives partial credit (continuous)."""
     state = make_state()
-    sub = {"correctness_pass_rate": 0.3, "adversarial_pass_rate": 0.95}
-    g = Gate(CorrectnessRubric(), threshold=0.6)
+    sub = {"compile_status": "success", "correctness_pass_rate": 0.45,
+           "adversarial_pass_rate": 0.95, "speedup": 5.0}
+    seq = Sequential(Gate(CorrectnessRubric(), threshold=0.6), CorrectnessRubric())
+    score = seq.score(state, sub)
+    assert 0.0 < score < 0.45  # in ramp zone — non-zero AND less than full
+
+
+def test_gate_continuous_no_cliff():
+    """The graduated gate must produce a continuous signal as input crosses threshold."""
+    state = make_state()
+    seq = Sequential(Gate(CorrectnessRubric(), threshold=0.6), CorrectnessRubric())
+    # Sweep from 0.0 → 1.0 in steps of 0.1
+    scores = []
+    for pr in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
+        sub = {"compile_status": "success", "correctness_pass_rate": pr,
+               "adversarial_pass_rate": 0.95}
+        scores.append(seq.score(state, sub))
+    # Below dead_floor: zero
+    assert scores[0] == 0.0
+    assert scores[1] == 0.0
+    # Ramp zone: monotone non-decreasing, all positive
+    assert all(scores[i+1] >= scores[i] for i in range(len(scores)-1))
+    # Should reach a higher value at full pass than mid-ramp
+    assert scores[-1] > scores[3]
+
+
+def test_gate_raises_below_dead_floor():
+    """Below the anti-cheat dead floor — gate raises, Sequential will return 0."""
+    state = make_state()
+    sub = {"correctness_pass_rate": 0.1, "adversarial_pass_rate": 0.95}
+    g = Gate(CorrectnessRubric(), threshold=0.6, dead_floor=0.3)
     with pytest.raises(GateFailedError):
         g.score(state, sub)
 
 
-def test_gate_passes_through_above_threshold():
+def test_gate_returns_full_multiplier_above_threshold():
+    """Score above threshold → multiplier of 1.0 (full pass-through)."""
     state = make_state()
     sub = {"correctness_pass_rate": 0.85, "adversarial_pass_rate": 0.95}
     g = Gate(CorrectnessRubric(), threshold=0.6)
-    assert g.score(state, sub) == pytest.approx(0.85)
+    assert g.score(state, sub) == 1.0
+
+
+def test_gate_ramp_returns_partial_multiplier():
+    """Score in ramp zone → multiplier ∈ (0, ramp_max]."""
+    state = make_state()
+    sub = {"correctness_pass_rate": 0.45, "adversarial_pass_rate": 0.95}
+    g = Gate(CorrectnessRubric(), threshold=0.6, dead_floor=0.3, ramp_max=0.4)
+    m = g.score(state, sub)
+    assert 0 < m < 0.4  # progress = (0.45-0.3)/(0.6-0.3) = 0.5; multiplier = 0.4 * 0.5 = 0.2
+    assert m == pytest.approx(0.2, abs=0.05)
+
+
+def test_hard_gate_returns_one_or_raises():
+    """hard=True gate is binary: 1.0 if pass, raise if fail."""
+    state = make_state()
+    g = Gate(CorrectnessRubric(), threshold=0.6, hard=True)
+    assert g.score(state, {"correctness_pass_rate": 0.9, "adversarial_pass_rate": 0.95}) == 1.0
+    with pytest.raises(GateFailedError):
+        g.score(state, {"correctness_pass_rate": 0.5, "adversarial_pass_rate": 0.95})
 
 
 def test_weighted_sum_composes():
@@ -243,9 +295,25 @@ def test_round1_dag_compile_fail_returns_zero():
     assert dag.score(state, sub) == 0.0
 
 
-def test_round1_dag_correct_below_60_returns_zero():
+def test_round1_dag_correct_in_ramp_zone_partial_credit():
+    """Between dead_floor (0.3) and R1 threshold (0.6) → partial credit, NOT zero.
+
+    This is the anti-cliff fix: GRPO needs non-zero gradient when the agent is
+    'almost there'. Random/wrong code (< 0.3) still scores 0.
+    """
     state = make_state(round_number=1)
     sub = {"compile_status": "success", "correctness_pass_rate": 0.5,
+           "adversarial_pass_rate": 0.95, "speedup": 5.0,
+           "reasoning_trace": "compute-bound"}
+    dag = build_round_reward_dag(1)
+    score = dag.score(state, sub)
+    assert 0.0 < score < 0.5  # partial, not zero, not full
+
+
+def test_round1_dag_correct_below_dead_floor_returns_zero():
+    """Below the anti-cheat dead floor (0.3) — random/wrong → 0 reward (preserved)."""
+    state = make_state(round_number=1)
+    sub = {"compile_status": "success", "correctness_pass_rate": 0.15,
            "adversarial_pass_rate": 0.95, "speedup": 5.0,
            "reasoning_trace": "compute-bound"}
     dag = build_round_reward_dag(1)
@@ -263,14 +331,24 @@ def test_round1_dag_full_pass_yields_positive():
     assert 0.3 < score < 1.0
 
 
-def test_round3_strict_gate_rejects_70_percent_correct():
-    """Round 3 demands ≥95% correctness — 70% must fail the gate."""
+def test_round3_70_percent_correct_yields_partial_not_zero():
+    """Round 3 strict threshold = 95%. 70% is in the graduated ramp zone (0.3-0.95)
+    so it should produce PARTIAL reward, not the binary zero of the old hard gate."""
     state = make_state(round_number=3)
+    state.round_results = [
+        {"round": 1, "submission": {"compile_status": "success", "speedup": 3.0},
+         "tool_calls": ["get_hardware_profile"]},
+        {"round": 2, "submission": {"compile_status": "success", "speedup": 6.0},
+         "tool_calls": []},
+    ]
     sub = {"compile_status": "success", "correctness_pass_rate": 0.7,
            "adversarial_pass_rate": 0.95, "speedup": 10.0,
            "reasoning_trace": "compute-bound"}
     dag = build_round_reward_dag(3)
-    assert dag.score(state, sub) == 0.0
+    score = dag.score(state, sub)
+    # Partial credit in ramp zone — non-zero but less than what a fully-passing submission gets
+    assert score > 0.0
+    assert score < 0.5  # less than what 0.95 would yield
 
 
 def test_round3_dag_full_pass_yields_positive():

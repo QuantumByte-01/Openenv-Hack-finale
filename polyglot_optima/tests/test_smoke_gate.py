@@ -129,26 +129,27 @@ def test_S4_verifier_pipeline_exists():
 
 # ---------- S5: Reward gates trigger correctly ----------
 
-def test_S5_round1_gate_fails_below_60_pct():
-    """Round 1 gate threshold is 60% correctness; below this → reward = 0."""
+def test_S5_round1_gate_dead_floor_rejects_random():
+    """Below the anti-cheat dead floor (0.3) → reward = 0 (random/wrong code)."""
     state = make_state()
     state.round_number = 1
-    sub = {"compile_status": "success", "correctness_pass_rate": 0.5,
+    sub = {"compile_status": "success", "correctness_pass_rate": 0.15,
            "adversarial_pass_rate": 0.95, "speedup": 5.0,
            "reasoning_trace": "compute-bound"}
     dag = build_round_reward_dag(1)
     assert dag.score(state, sub) == 0.0
 
 
-def test_S5b_round3_gate_fails_below_95_pct():
-    """Round 3 gate threshold is 95% correctness — strict per plan §10."""
+def test_S5b_round1_ramp_zone_gives_partial_credit():
+    """Between dead_floor (0.3) and threshold (0.6) → partial reward (continuous, not binary)."""
     state = make_state()
-    state.round_number = 3
-    sub = {"compile_status": "success", "correctness_pass_rate": 0.7,
+    state.round_number = 1
+    sub = {"compile_status": "success", "correctness_pass_rate": 0.5,
            "adversarial_pass_rate": 0.95, "speedup": 5.0,
            "reasoning_trace": "compute-bound"}
-    dag = build_round_reward_dag(3)
-    assert dag.score(state, sub) == 0.0
+    dag = build_round_reward_dag(1)
+    score = dag.score(state, sub)
+    assert 0.0 < score < 0.5  # graduated, not cliff
 
 
 # ---------- S6: DiagnosisRubric scores correctly ----------
@@ -258,8 +259,8 @@ def test_smoke_gate_all_required_passing():
         "test_S1_all_nine_tools_registered",
         "test_S3_verifier_rejects_empty_cpp",
         "test_S4_verifier_pipeline_exists",
-        "test_S5_round1_gate_fails_below_60_pct",
-        "test_S5b_round3_gate_fails_below_95_pct",
+        "test_S5_round1_gate_dead_floor_rejects_random",
+        "test_S5b_round1_ramp_zone_gives_partial_credit",
         "test_S6_diagnosis_differential_correct_vs_distractor",
         "test_S7_curriculum_escalates_and_deescalates",
         "test_S8_hardware_profiles_deterministic",

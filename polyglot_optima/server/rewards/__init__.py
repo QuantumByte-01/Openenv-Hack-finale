@@ -58,10 +58,14 @@ def build_round_reward_dag(round_number: int):
     correctness = CorrectnessRubric()
     compilation = CompilationRubric()
 
+    # CompilationRubric uses HARD gate — you either compiled or you didn't.
+    # CorrectnessRubric uses GRADUATED gate — partial credit between dead_floor (0.3)
+    # and the round's threshold, full credit above. Preserves anti-cheat (<0.3 = 0)
+    # while providing GRPO with a continuous gradient signal (per plan §3 "not binary").
     if round_number == 1:
         return Sequential(
-            Gate(correctness, threshold=0.6),
-            Gate(compilation, threshold=1.0),
+            Gate(correctness, threshold=0.6, dead_floor=0.3, ramp_max=0.4),
+            Gate(compilation, threshold=1.0, hard=True),
             WeightedSum(
                 {"speedup": SpeedupRubric(),
                  "correctness": correctness,
@@ -72,8 +76,8 @@ def build_round_reward_dag(round_number: int):
 
     if round_number == 2:
         return Sequential(
-            Gate(correctness, threshold=0.80),
-            Gate(compilation, threshold=1.0),
+            Gate(correctness, threshold=0.80, dead_floor=0.3, ramp_max=0.35),
+            Gate(compilation, threshold=1.0, hard=True),
             WeightedSum(
                 {"speedup": SpeedupRubric(),
                  "correctness": correctness,
@@ -82,10 +86,10 @@ def build_round_reward_dag(round_number: int):
             ),
         )
 
-    # Round 3 — strict + full 5 components
+    # Round 3 — strict gate (95%), full 5 components
     return Sequential(
-        Gate(correctness, threshold=0.95),
-        Gate(compilation, threshold=1.0),
+        Gate(correctness, threshold=0.95, dead_floor=0.3, ramp_max=0.30),
+        Gate(compilation, threshold=1.0, hard=True),
         WeightedSum(
             {"speedup": SpeedupRubric(),
              "correctness": correctness,
