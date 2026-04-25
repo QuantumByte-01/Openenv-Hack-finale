@@ -1,0 +1,44 @@
+name: polyglot-optima
+version: 1.0.0
+description: |
+  Adversarial Neural JIT Compiler. Trains a reasoning LLM to translate Python
+  functions into hardware-aware optimized C++20 that beats GCC -O3 of a naive
+  translation. Uses an adaptive 4-axis curriculum, Roofline-grounded reward,
+  reasoning-trace-as-RL-signal, cross-hardware portability bonus, and a 30-trap
+  anti-gaming library.
+
+# Informal metadata (schema not yet published in openenv.yaml; surfaced for catalog)
+metadata:
+  themes:
+    - world-modeling-professional
+    - self-improvement
+  hackathon: meta-pytorch-openenv-india-2026
+  max_turns: 12
+  episode_rounds: 3
+  model_targets:
+    optimizer: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+    generator: Qwen/Qwen2.5-Coder-1.5B-Instruct
+  hardware_profiles_count: 8
+  difficulty_axes: 4
+
+server:
+  entry_point: server.app:app
+  module: server.app
+  app_factory: build_app
+
+client:
+  module: client
+  class: PolyglotOptimaClient
+
+# Tool list — auto-discovered from @tool decorators in server/tools/*.py
+# but listed here for catalog/discoverability
+tools:
+  - get_hardware_profile
+  - profile_python_hotspots
+  - analyze_complexity
+  - check_memory_access
+  - compile_and_benchmark
+  - verify_equivalence
+  - check_portability
+  - get_bottleneck_report
+  - submit_optimization

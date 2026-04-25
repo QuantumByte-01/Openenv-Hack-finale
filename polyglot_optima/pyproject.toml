@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyglot-optima"
+version = "1.0.0"
+description = "Adversarial Neural JIT Compiler — Python to hardware-optimized C++ via RL"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Swastik R", email = "swastik.r.900@gmail.com" }
+]
+keywords = ["openenv", "rl", "compiler", "code-optimization", "grpo", "agentic"]
+
+dependencies = [
+    # OpenEnv core
+    "openenv>=0.3.0",
+    # Server
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.6",
+    "websockets>=12.0",
+    # Tools
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "scikit-learn>=1.4",
+    # Code analysis
+    "astroid>=3.0",
+    # Compilation + execution
+    "pybind11>=2.13",
+    # Datasets
+    "datasets>=2.18",
+    "huggingface_hub>=0.22",
+    # UI
+    "gradio>=4.0",
+    # Logging
+    "wandb>=0.16",
+]
+
+[project.optional-dependencies]
+training = [
+    # GRPO + Unsloth
+    "trl>=0.14.0",
+    "unsloth",
+    "transformers>=4.40",
+    "accelerate>=0.30",
+    "peft>=0.11",
+    "bitsandbytes>=0.43",
+    "vllm>=0.5.0",
+    "torch>=2.3",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Repository = "https://github.com/QuantumByte-01/Openenv-Hack-finale"
+HFSpace = "https://huggingface.co/spaces/swastik/polyglot-optima"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["server*", "training*", "eval*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
