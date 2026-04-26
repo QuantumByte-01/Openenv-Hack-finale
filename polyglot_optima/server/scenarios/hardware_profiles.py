@@ -16,20 +16,20 @@ from typing import Any
 
 HARDWARE_PROFILES: list[dict[str, Any]] = [
     # Class 0 — easy, common consumer hardware
-    {"id": "laptop_sse",    "cores": 4,  "freq_ghz": 3.2, "l1_kb": 32, "simd": "SSE4.2",  "bw_gbs": 40, "class": 0},
-    {"id": "desktop_avx2",  "cores": 8,  "freq_ghz": 3.8, "l1_kb": 32, "simd": "AVX2",    "bw_gbs": 51, "class": 0},
+    {"id": "laptop_sse",    "cores": 4,  "freq_ghz": 3.2, "l1_kb": 32, "simd": "SSE4.2",  "bw_gbs": 40, "class": 0, "target": "x86_SSE"},
+    {"id": "desktop_avx2",  "cores": 8,  "freq_ghz": 3.8, "l1_kb": 32, "simd": "AVX2",    "bw_gbs": 51, "class": 0, "target": "x86_AVX2"},
 
     # Class 1 — medium, varied
-    {"id": "workstation",   "cores": 12, "freq_ghz": 4.0, "l1_kb": 48, "simd": "AVX2",    "bw_gbs": 76, "class": 1},
-    {"id": "arm_neon_a",    "cores": 6,  "freq_ghz": 2.4, "l1_kb": 64, "simd": "NEON",    "bw_gbs": 68, "class": 1},
-    {"id": "laptop_sse2",   "cores": 4,  "freq_ghz": 2.6, "l1_kb": 64, "simd": "SSE4.2",  "bw_gbs": 35, "class": 1},
+    {"id": "workstation",   "cores": 12, "freq_ghz": 4.0, "l1_kb": 48, "simd": "AVX2",    "bw_gbs": 76, "class": 1, "target": "x86_AVX2"},
+    {"id": "arm_neon_a",    "cores": 6,  "freq_ghz": 2.4, "l1_kb": 64, "simd": "NEON",    "bw_gbs": 68, "class": 1, "target": "ARM_NEON"},
+    {"id": "laptop_sse2",   "cores": 4,  "freq_ghz": 2.6, "l1_kb": 64, "simd": "SSE4.2",  "bw_gbs": 35, "class": 1, "target": "x86_SSE"},
 
     # Class 2 — hard, demands real hardware reasoning
-    {"id": "server_avx512", "cores": 16, "freq_ghz": 3.0, "l1_kb": 48, "simd": "AVX-512", "bw_gbs": 89, "class": 2},
-    {"id": "embedded",      "cores": 2,  "freq_ghz": 1.8, "l1_kb": 16, "simd": "none",    "bw_gbs": 25, "class": 2},
+    {"id": "server_avx512", "cores": 16, "freq_ghz": 3.0, "l1_kb": 48, "simd": "AVX-512", "bw_gbs": 89, "class": 2, "target": "x86_AVX512"},
+    {"id": "embedded",      "cores": 2,  "freq_ghz": 1.8, "l1_kb": 16, "simd": "none",    "bw_gbs": 25, "class": 2, "target": "scalar_only"},
 
     # HELD-OUT for Gen-2 evaluation — never sampled during training
-    {"id": "arm_neon_b",    "cores": 8,  "freq_ghz": 2.8, "l1_kb": 32, "simd": "NEON",    "bw_gbs": 68, "class": 2, "held_out": True},
+    {"id": "arm_neon_b",    "cores": 8,  "freq_ghz": 2.8, "l1_kb": 32, "simd": "NEON",    "bw_gbs": 68, "class": 2, "target": "ARM_NEON", "held_out": True},
 ]
 
 

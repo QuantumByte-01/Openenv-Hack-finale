@@ -80,13 +80,18 @@ def submit_optimization_tool(tool_args: dict[str, Any], state) -> dict[str, Any]
         state.best_speedup = bench["speedup"]
         state.best_cpp_code = cpp_code
 
-    # Hard gate threshold by round
+    # Round-aware readiness score (continuous) + boolean convenience flag
     round_thresholds = {1: 0.6, 2: 0.8, 3: 0.95}
     threshold = round_thresholds.get(state.round_number, 0.6)
-    correctness_pass = verifier_result["pass_rate"] >= threshold
-    adversarial_pass = verifier_result["adversarial_pass_rate"] >= 0.9
-
-    ready = bench["compile_status"] == "success" and correctness_pass and adversarial_pass
+    correctness_ratio = verifier_result["pass_rate"] / max(threshold, 1e-9)
+    adversarial_ratio = verifier_result.get("adversarial_pass_rate", 0.0) / 0.9
+    compile_quality = 1.0 if bench["compile_status"] == "success" else 0.0
+    readiness_score = (
+        0.55 * min(1.0, correctness_ratio)
+        + 0.30 * min(1.0, adversarial_ratio)
+        + 0.15 * compile_quality
+    )
+    ready = readiness_score >= 0.9
 
     return {
         "compile_status": bench["compile_status"],
@@ -98,6 +103,7 @@ def submit_optimization_tool(tool_args: dict[str, Any], state) -> dict[str, Any]
         "first_correctness_failure": verifier_result.get("first_failure"),
         "portability": portability_result,
         "n_profiles_passing": portability_result.get("n_profiles_passing", 0),
+        "readiness_score": readiness_score,
         "ready_for_reward": ready,
         "cpp_code": cpp_code,
         "reasoning_trace": reasoning_trace,

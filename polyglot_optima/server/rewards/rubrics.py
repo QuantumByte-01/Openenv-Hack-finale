@@ -88,41 +88,36 @@ class Sequential(Rubric):
 
 
 class Gate(Rubric):
-    """Three-zone graduated gate. Replaces the hard binary cliff with continuous reward.
+    """Continuous gate multiplier for shaping reward without binary cliffs.
 
-    Zones (per plan §3 "continuous reward, not binary"):
-        score < dead_floor:           reward = 0  (anti-cheat — random/wrong code earns nothing)
-        dead_floor <= score < threshold:
-                                      partial credit, linear ramp 0 -> ramp_max * downstream
-        score >= threshold:           full pass-through (downstream gets unmodified score)
+    In default mode, this gate never raises and always returns a multiplier in
+    [ramp_min, 1.0], where `ramp_min` is small but non-zero. That preserves
+    gradient signal even for weak submissions.
 
-    The "raise GateFailedError" behavior is preserved ONLY for the dead-floor zone.
-    Sequential catches it and returns 0 for the whole DAG. Above the floor, even a
-    sub-threshold submission gets partial reward — GRPO has gradient to climb.
-
-    `hard=True` restores the original binary-cliff behavior (used for CompilationRubric:
-    you either compiled or you didn't, no partial credit for "almost compiled").
+    `hard=True` is kept only for backward compatibility.
     """
 
-    def __init__(self, child: Rubric, threshold: float, dead_floor: float = 0.3,
-                 ramp_max: float = 0.3, hard: bool = False):
+    def __init__(self, child: Rubric, threshold: float, dead_floor: float = 0.0,
+                 ramp_max: float = 1.0, hard: bool = False, ramp_min: float = 0.05,
+                 exponent: float = 2.0):
         self.child = child
         self.threshold = threshold
         self.dead_floor = dead_floor
         self.ramp_max = ramp_max
         self.hard = hard
+        self.ramp_min = ramp_min
+        self.exponent = exponent
         self.name = f"gate({child.name}>={threshold:.2f})"
 
     def score(self, state, submission: dict[str, Any]) -> float:
         """Returns a MULTIPLIER ∈ [0, 1] for Sequential to multiply the final score by.
 
         Hard mode:
-            score >= threshold → 1.0  (full pass-through multiplier)
-            score < threshold  → raises GateFailedError (Sequential→0)
-        Graduated mode:
-            score < dead_floor → raises (Sequential→0; anti-cheat preserved)
-            dead_floor ≤ score < threshold → ramp_max * progress  (continuous, ∈ (0, ramp_max])
-            score >= threshold → 1.0  (full multiplier)
+            score >= threshold → 1.0
+            score < threshold  → raises GateFailedError
+        Continuous mode:
+            score >= threshold → 1.0
+            score < threshold  → smooth multiplier in [ramp_min, ramp_max]
         """
         s = self.child.score(state, submission)
 
@@ -135,27 +130,20 @@ class Gate(Rubric):
                 raise GateFailedError(f"{self.child.name} = {s:.3f} < {self.threshold} (hard)")
             return 1.0
 
-        # Graduated
-        if s < self.dead_floor:
-            self.last_breakdown = {"child": s, "threshold": self.threshold, "zone": "dead"}
-            raise GateFailedError(
-                f"{self.child.name} = {s:.3f} < dead_floor={self.dead_floor}"
-            )
-
         if s >= self.threshold:
             self.last_breakdown = {"child": s, "threshold": self.threshold, "zone": "full"}
             return 1.0
 
-        # Ramp: linear in [dead_floor, threshold) → multiplier in (0, ramp_max]
-        span = self.threshold - self.dead_floor
-        progress = (s - self.dead_floor) / max(span, 1e-9)
-        multiplier = self.ramp_max * progress
+        # Smooth ramp in [0, threshold) with non-zero floor.
+        normalized = max(0.0, s) / max(self.threshold, 1e-9)
+        progress = max(0.0, min(1.0, normalized)) ** self.exponent
+        multiplier = self.ramp_min + (self.ramp_max - self.ramp_min) * progress
 
         self.last_breakdown = {
             "child": s, "threshold": self.threshold,
             "zone": "ramp", "progress": progress, "multiplier": multiplier,
         }
-        return multiplier
+        return float(max(0.0, min(1.0, multiplier)))
 
 
 class WeightedSum(Rubric):

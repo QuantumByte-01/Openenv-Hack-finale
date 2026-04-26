@@ -20,10 +20,77 @@ from __future__ import annotations
 
 import ast
 import random
-import sys
+import warnings
 from typing import Any
 
 import numpy as np
+
+
+_ALLOWED_IMPORT_MODULES = {"math", "numpy"}
+_BANNED_CALLS = {"eval", "exec", "compile", "open", "__import__", "input"}
+
+
+def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = name.split(".")[0]
+    if root not in _ALLOWED_IMPORT_MODULES:
+        raise RuntimeError(f"import '{name}' is not allowed in verifier")
+    return __import__(name, globals, locals, fromlist, level)
+
+
+def _validate_python_code_safety(tree: ast.AST) -> None:
+    """Reject high-risk constructs before running user-provided Python code."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if root not in _ALLOWED_IMPORT_MODULES:
+                    raise RuntimeError(f"import '{alias.name}' is not allowed in verifier")
+        if isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".")[0]
+            if module and module not in _ALLOWED_IMPORT_MODULES:
+                raise RuntimeError(f"from '{node.module}' import ... is not allowed in verifier")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in _BANNED_CALLS:
+                raise RuntimeError(f"call '{node.func.id}(...)' is not allowed in verifier")
+
+
+def _safe_exec_function(python_code: str, fn_name: str):
+    """Compile and execute Python in a constrained namespace, then return fn."""
+    tree = ast.parse(python_code)
+    _validate_python_code_safety(tree)
+
+    safe_builtins = {
+        "abs": abs,
+        "all": all,
+        "any": any,
+        "bool": bool,
+        "dict": dict,
+        "enumerate": enumerate,
+        "Exception": Exception,
+        "float": float,
+        "int": int,
+        "len": len,
+        "list": list,
+        "max": max,
+        "min": min,
+        "TypeError": TypeError,
+        "pow": pow,
+        "range": range,
+        "round": round,
+        "set": set,
+        "sorted": sorted,
+        "sum": sum,
+        "tuple": tuple,
+        "ValueError": ValueError,
+        "__import__": _safe_import,
+        "zip": zip,
+    }
+    ns: dict[str, Any] = {"__builtins__": safe_builtins, "np": np}
+    exec(compile(tree, filename="<verifier_python>", mode="exec"), ns)
+    fn = ns.get(fn_name)
+    if fn is None:
+        raise RuntimeError(f"function '{fn_name}' not defined in python_code")
+    return fn
 
 
 # ---------- Input generation from Python AST ----------
@@ -137,12 +204,8 @@ def _numerically_equivalent(a: Any, b: Any, rtol: float) -> bool:
 
 
 def _exec_python_in_sandbox(python_code: str, fn_name: str, args: tuple) -> Any:
-    """Run python_code's function on args. For now in-process; sandboxed in Hour 16."""
-    ns: dict[str, Any] = {}
-    exec(python_code, ns)
-    fn = ns.get(fn_name)
-    if fn is None:
-        raise RuntimeError(f"function '{fn_name}' not defined in python_code")
+    """Run python_code's function on args in a constrained namespace."""
+    fn = _safe_exec_function(python_code, fn_name)
     return fn(*args)
 
 
@@ -161,11 +224,7 @@ def _exec_cpp_via_so(so_path: str, fn_name: str, args: tuple, py_fn=None, py_cod
     if py_fn is None:
         if not py_code:
             raise RuntimeError("verifier: need py_fn or py_code to dispatch C++")
-        ns: dict[str, Any] = {}
-        exec(py_code, ns)
-        py_fn = ns.get(fn_name)
-        if py_fn is None:
-            raise RuntimeError(f"verifier: function {fn_name!r} not found in py_code")
+        py_fn = _safe_exec_function(py_code, fn_name)
     return call_compiled(so_path, py_fn, args)
 
 
@@ -192,6 +251,8 @@ def verify_equivalence_tool(tool_args: dict[str, Any], state) -> dict[str, Any]:
 
     if not cpp_code.strip():
         return {"pass_rate": 0.0, "error": "empty cpp_code"}
+    if n_cases <= 0:
+        return {"pass_rate": 0.0, "error": "n_cases must be >= 1", "n_cases": n_cases}
 
     # Defeat lookup-table cheating mode 4: seed varies per call
     seed = random.randint(0, 2**32 - 1)
@@ -223,12 +284,8 @@ def verify_equivalence_tool(tool_args: dict[str, Any], state) -> dict[str, Any]:
     so_path = compile_result["so_path"]
 
     # Pre-load the Python reference function once (avoids repeated exec overhead)
-    ref_ns: dict[str, Any] = {}
     try:
-        exec(python_code, ref_ns)
-        py_fn = ref_ns.get(fn_name)
-        if py_fn is None:
-            return {"pass_rate": 0.0, "error": f"py function {fn_name!r} not found after exec"}
+        py_fn = _safe_exec_function(python_code, fn_name)
     except Exception as e:
         return {"pass_rate": 0.0, "error": f"python exec failed: {e}"}
 
@@ -245,7 +302,12 @@ def verify_equivalence_tool(tool_args: dict[str, Any], state) -> dict[str, Any]:
 
         # Run Python first; if it raises, skip (don't penalize the C++ for invalid input)
         try:
-            py_out = py_fn(*args)
+            # Adversarial fuzzing intentionally includes edge values (nan/inf/zero).
+            # Suppress expected NumPy runtime warnings so job logs stay readable.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+                    py_out = py_fn(*args)
         except Exception:
             continue
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import random
 import uuid
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -75,10 +76,14 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
         max_rounds: int = 3,
         max_calls_per_round: int = 5,
         adaptive_axes: dict[str, int] | None = None,
+        enable_adaptive_curriculum: bool = True,
+        curriculum_batch_size: int = 8,
     ):
         super().__init__()
         self.max_rounds = max_rounds
         self.max_calls_per_round = max_calls_per_round
+        self.enable_adaptive_curriculum = enable_adaptive_curriculum
+        self.curriculum_batch_size = max(1, int(curriculum_batch_size))
         # Default axes — overridden by adaptive_curriculum across batches
         self._global_axes = adaptive_axes or {
             "function_tier": 0,
@@ -87,12 +92,15 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
             "portability_required": 0,
         }
         self._sessions: dict[str, OptimizationState] = {}
+        self._active_episode_id: str | None = None
 
         # Lazy imports — modules built in subsequent hours
         self._tool_registry: dict[str, Any] = {}
         self._dataset_loader = None
         self._hardware_profiles = None
         self._reward_dag = None
+        self._curriculum = None
+        self._episode_success_buffer: list[float] = []
 
     # -------------------- Gym-style explicit API --------------------
 
@@ -127,6 +135,7 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
             trap_id=problem.get("trap_id"),
         )
         self._sessions[episode_id] = state
+        self._active_episode_id = episode_id
 
         return OptimizationObservation(
             done=False,
@@ -152,38 +161,58 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
         `submit_optimization`, the current round closes — reward is computed,
         round advances, and on round 3 the episode terminates.
         """
-        # Locate the active session — for now we assume single-session mode;
-        # multi-session support comes via _sessions[action.episode_id]
         if not self._sessions:
             raise OpenEnvError("No active episode. Call reset() first.")
-        state = next(iter(self._sessions.values()))
+        if self._active_episode_id and self._active_episode_id in self._sessions:
+            state = self._sessions[self._active_episode_id]
+        else:
+            # Fall back to the most recently created episode.
+            latest_episode_id = next(reversed(self._sessions))
+            self._active_episode_id = latest_episode_id
+            state = self._sessions[latest_episode_id]
 
         if state.is_terminal:
             raise OpenEnvError("Episode is already terminal. Call reset() to start a new one.")
 
-        if action.tool_name in _RESERVED_TOOL_NAMES:
+        forced_submit = False
+        effective_tool_name = action.tool_name
+        effective_tool_args = dict(action.tool_args or {})
+        if (
+            action.tool_name != "submit_optimization"
+            and len(state.current_round_tool_calls) >= self.max_calls_per_round
+        ):
+            forced_submit = True
+            effective_tool_name = "submit_optimization"
+            effective_tool_args = {
+                "cpp_code": effective_tool_args.get("cpp_code", "// auto-forced submit: call budget reached"),
+                "reasoning_trace": action.reasoning_trace or "auto forced submit after max tool calls",
+            }
+
+        if effective_tool_name in _RESERVED_TOOL_NAMES:
             raise OpenEnvError(
-                f"Tool name '{action.tool_name}' is reserved. "
+                f"Tool name '{effective_tool_name}' is reserved. "
                 f"Reserved names: {sorted(_RESERVED_TOOL_NAMES)}"
             )
 
         # Track tool call + reasoning trace for this round
         state.step_count += 1
-        state.current_round_tool_calls.append(action.tool_name)
+        state.current_round_tool_calls.append(effective_tool_name)
         if action.reasoning_trace:
             state.current_round_reasoning += action.reasoning_trace + "\n"
 
         # Route to the named tool — full implementation in Hour 4–10
-        tool_result = self._dispatch_tool(action.tool_name, action.tool_args, state)
+        tool_result = self._dispatch_tool(effective_tool_name, effective_tool_args, state)
 
         # Is this a round-closing submission?
-        is_submit = action.tool_name == "submit_optimization"
+        is_submit = effective_tool_name == "submit_optimization"
         round_reward = 0.0
         terminal = False
 
         if is_submit:
             # Compute reward for this round (Hour 10–16 implementation)
             round_reward = self._compute_round_reward(state, tool_result)
+            if self._dataset_loader is not None and hasattr(self._dataset_loader, "record_submission_outcome"):
+                self._dataset_loader.record_submission_outcome(state, tool_result)
             state.round_results.append({
                 "round": state.round_number,
                 "reward": round_reward,
@@ -214,7 +243,13 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
             metadata={
                 "episode_id": state.episode_id,
                 "step_count": state.step_count,
-                "tool_called": action.tool_name,
+                "tool_called": effective_tool_name,
+                "forced_submit": forced_submit,
+                "target_isa": state.hardware_profile.get("target", "scalar_only"),
+                "round_reward_breakdown": tool_result.get("_rubric_breakdown", {}),
+                "round_readiness_score": tool_result.get("readiness_score"),
+                "round_correctness_pass_rate": tool_result.get("correctness_pass_rate"),
+                "round_compile_status": tool_result.get("compile_status"),
             },
         )
 
@@ -228,6 +263,7 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
                 "r3": r3,
                 "episode_total": observation.reward,
             }
+            self._record_episode_outcome(state, observation)
 
         return StepResult(
             observation=observation,
@@ -240,11 +276,16 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
         """Return current episode state (Gym-style state introspection)."""
         if not self._sessions:
             raise OpenEnvError("No active episode.")
-        return next(iter(self._sessions.values()))
+        if self._active_episode_id and self._active_episode_id in self._sessions:
+            return self._sessions[self._active_episode_id]
+        latest_episode_id = next(reversed(self._sessions))
+        self._active_episode_id = latest_episode_id
+        return self._sessions[latest_episode_id]
 
     def close(self) -> None:
         """Release all resources (compiler subprocesses, fuzzer pool)."""
         self._sessions.clear()
+        self._active_episode_id = None
         # Subsystem-specific cleanup — implemented as tools come online
         if self._tool_registry:
             for tool in self._tool_registry.values():
@@ -278,7 +319,8 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
         if self._dataset_loader is None:
             try:
                 from server.scenarios import DatasetLoader
-                self._dataset_loader = DatasetLoader(prefer_real_datasets=False)
+                prefer_real = os.environ.get("POLYGLOT_OPTIMA_PREFER_REAL_DATASETS", "1") == "1"
+                self._dataset_loader = DatasetLoader(prefer_real_datasets=prefer_real)
             except ImportError:
                 self._dataset_loader = _StubDatasetLoader()
 
@@ -290,6 +332,13 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
                 self._hardware_profiles = [p for p in HARDWARE_PROFILES if not p.get("held_out")]
             except ImportError:
                 self._hardware_profiles = _STUB_PROFILES
+
+        if self._curriculum is None and self.enable_adaptive_curriculum:
+            try:
+                from server.scenarios import AdaptiveCurriculum
+                self._curriculum = AdaptiveCurriculum(initial_axes=dict(self._global_axes))
+            except ImportError:
+                self._curriculum = None
 
     def _sample_problem(self, rng: random.Random) -> dict[str, Any]:
         """Sample (function, hw_profile, ground_truth_labels) for an episode.
@@ -312,6 +361,29 @@ class PolyglotOptimaEnvironment(MCPEnvironment):
             }
 
         return self._dataset_loader.sample(self._global_axes, rng)
+
+    def _record_episode_outcome(self, state: OptimizationState, observation: OptimizationObservation) -> None:
+        """Update adaptive curriculum after fixed-size batches of completed episodes."""
+        if not self.enable_adaptive_curriculum or self._curriculum is None:
+            return
+        final_submission = state.round_results[-1]["submission"] if state.round_results else {}
+        pass_rate = float(final_submission.get("correctness_pass_rate", 0.0))
+        compile_ok = final_submission.get("compile_status") == "success"
+        episode_success = 1.0 if (compile_ok and pass_rate >= 0.8) else 0.0
+        self._episode_success_buffer.append(episode_success)
+        observation.metadata["curriculum_pending_batch_count"] = len(self._episode_success_buffer)
+        if len(self._episode_success_buffer) < self.curriculum_batch_size:
+            return
+        success_rate = sum(self._episode_success_buffer) / len(self._episode_success_buffer)
+        action = self._curriculum.observe_batch(success_rate)
+        self._global_axes = dict(self._curriculum.axes)
+        self._episode_success_buffer.clear()
+        observation.metadata["curriculum"] = {
+            "success_rate": success_rate,
+            "action": action,
+            "axes": dict(self._global_axes),
+            "batches_seen": self._curriculum.n_batches_seen,
+        }
 
     def _dispatch_tool(self, tool_name: str, tool_args: dict[str, Any], state: OptimizationState) -> dict[str, Any]:
         """Route a tool call to the registered handler.
@@ -374,6 +446,7 @@ _STUB_PROFILES = [
         "simd": "AVX2",
         "bw_gbs": 51,
         "roofline_bound_gflops": 25.5,
+        "target": "x86_AVX2",
     },
 ]
 

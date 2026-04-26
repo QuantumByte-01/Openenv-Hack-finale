@@ -36,15 +36,22 @@ class CorrectnessRubric(Rubric):
 
 
 class CompilationRubric(Rubric):
-    """1.0 if the submission compiled; 0.0 otherwise."""
+    """Continuous compile quality score from compile status."""
 
     name = "compilation"
 
     def score(self, state, submission: dict[str, Any]) -> float:
         compile_status = submission.get("compile_status", "pending")
-        ok = compile_status == "success"
-        self.last_breakdown = {"compile_status": compile_status, "score": 1.0 if ok else 0.0}
-        return 1.0 if ok else 0.0
+        status_to_score = {
+            "success": 1.0,
+            "link_error": 0.55,
+            "timeout": 0.35,
+            "syntax_error": 0.10,
+            "pending": 0.0,
+        }
+        score = float(status_to_score.get(str(compile_status), 0.0))
+        self.last_breakdown = {"compile_status": compile_status, "score": score}
+        return max(0.0, min(1.0, score))
 
 
 __all__ = ["CorrectnessRubric", "CompilationRubric"]

@@ -17,9 +17,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -181,12 +181,21 @@ def _check_for_banned_headers(cpp_code: str) -> str | None:
 
 
 def _has_required_entry_point(cpp_code: str) -> bool:
-    """Verify the C++ code declares an `extern \"C\"` agent_function entry point.
+    """Validate canonical ABI expected by runtime dispatcher.
 
-    Soft check — if missing, compilation will eventually fail at link time when
-    the verifier tries to dispatch. Returning False here is just a hint for the agent.
+    Required signature:
+      extern "C" void agent_function(const double*, size_t|unsigned long long,
+                                     double*, size_t|unsigned long long)
     """
-    return ("extern \"C\"" in cpp_code or 'extern"C"' in cpp_code) and "agent_function" in cpp_code
+    pattern = (
+        r'extern\s*"C"\s+void\s+agent_function\s*\('
+        r'\s*const\s+double\s*\*\s*(?:\w+)?\s*,'
+        r'\s*(?:size_t|unsigned\s+long\s+long)\s*(?:\w+)?\s*,'
+        r'\s*double\s*\*\s*(?:\w+)?\s*,'
+        r'\s*(?:size_t|unsigned\s+long\s+long)\s*(?:\w+)?\s*'
+        r'\)'
+    )
+    return re.search(pattern, cpp_code, flags=re.IGNORECASE | re.DOTALL) is not None
 
 
 def _compile(cpp_code: str, hw_profile: dict[str, Any], cache_key: str, timeout_s: int = 30) -> dict[str, Any]:

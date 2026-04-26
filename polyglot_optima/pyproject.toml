@@ -16,7 +16,7 @@ keywords = ["openenv", "rl", "compiler", "code-optimization", "grpo", "agentic"]
 
 dependencies = [
     # OpenEnv core
-    "openenv>=0.3.0",
+    "openenv>=0.1.13",
     # Server
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",

@@ -431,6 +431,17 @@ def sample_trap(rng, exclude_held_out: bool = True) -> Trap:
     return rng.choice(pool)
 
 
+def sample_trap_by_category(category: str, rng, exclude_held_out: bool = True) -> Trap | None:
+    """Sample one trap from a specific category. Returns None if unavailable."""
+    pool = [
+        t for t in TRAP_LIBRARY
+        if t.category == category and not (exclude_held_out and t.held_out)
+    ]
+    if not pool:
+        return None
+    return rng.choice(pool)
+
+
 def trap_to_problem_dict(trap: Trap, hw_profile: dict[str, Any]) -> dict[str, Any]:
     """Convert a Trap into the env._sample_problem() return shape."""
     # Default distractor pool excluding the trap's true labels
@@ -470,6 +481,7 @@ __all__ = [
     "TRAP_LIBRARY",
     "get_trap_by_id",
     "sample_trap",
+    "sample_trap_by_category",
     "trap_to_problem_dict",
     "N_TRAPS_TOTAL",
     "N_TRAPS_TRAINING",

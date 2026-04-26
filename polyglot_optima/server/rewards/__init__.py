@@ -58,46 +58,44 @@ def build_round_reward_dag(round_number: int):
     correctness = CorrectnessRubric()
     compilation = CompilationRubric()
 
-    # CompilationRubric uses HARD gate — you either compiled or you didn't.
-    # CorrectnessRubric uses GRADUATED gate — partial credit between dead_floor (0.3)
-    # and the round's threshold, full credit above. Preserves anti-cheat (<0.3 = 0)
-    # while providing GRPO with a continuous gradient signal (per plan §3 "not binary").
+    # Continuous reward shaping: no hard cliffs in the main training signal.
+    # Compilation and correctness both use smooth gates to keep gradient flow alive.
     if round_number == 1:
         return Sequential(
-            Gate(correctness, threshold=0.6, dead_floor=0.3, ramp_max=0.4),
-            Gate(compilation, threshold=1.0, hard=True),
+            Gate(correctness, threshold=0.6, ramp_min=0.05, ramp_max=1.0, exponent=2.0),
+            Gate(compilation, threshold=1.0, ramp_min=0.01, ramp_max=1.0, exponent=2.0),
             WeightedSum(
                 {"speedup": SpeedupRubric(),
                  "correctness": correctness,
                  "diagnosis": DiagnosisRubric()},
-                weights={"speedup": 0.40, "correctness": 0.30, "diagnosis": 0.30},
+                weights={"speedup": 0.30, "correctness": 0.55, "diagnosis": 0.15},
             ),
         )
 
     if round_number == 2:
         return Sequential(
-            Gate(correctness, threshold=0.80, dead_floor=0.3, ramp_max=0.35),
-            Gate(compilation, threshold=1.0, hard=True),
+            Gate(correctness, threshold=0.80, ramp_min=0.05, ramp_max=1.0, exponent=2.0),
+            Gate(compilation, threshold=1.0, ramp_min=0.01, ramp_max=1.0, exponent=2.0),
             WeightedSum(
                 {"speedup": SpeedupRubric(),
                  "correctness": correctness,
                  "diagnosis": DiagnosisRubric()},
-                weights={"speedup": 0.40, "correctness": 0.30, "diagnosis": 0.30},
+                weights={"speedup": 0.30, "correctness": 0.55, "diagnosis": 0.15},
             ),
         )
 
     # Round 3 — strict gate (95%), full 5 components
     return Sequential(
-        Gate(correctness, threshold=0.95, dead_floor=0.3, ramp_max=0.30),
-        Gate(compilation, threshold=1.0, hard=True),
+        Gate(correctness, threshold=0.95, ramp_min=0.05, ramp_max=1.0, exponent=2.0),
+        Gate(compilation, threshold=1.0, ramp_min=0.01, ramp_max=1.0, exponent=2.0),
         WeightedSum(
             {"speedup": SpeedupRubric(),
              "correctness": correctness,
              "diagnosis": DiagnosisRubric(),
              "self_correction": SelfCorrectionRubric(),
              "portability": PortabilityRubric()},
-            weights={"speedup": 0.35, "correctness": 0.25,
-                     "diagnosis": 0.20, "self_correction": 0.10, "portability": 0.10},
+            weights={"speedup": 0.25, "correctness": 0.35,
+                     "diagnosis": 0.10, "self_correction": 0.15, "portability": 0.15},
         ),
     )
 
