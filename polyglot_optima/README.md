@@ -73,7 +73,7 @@ You can use this environment directly in a local notebook without deploying to H
 
 ## Results (Judge-facing)
 
-After running `training/openenv_hackathon_training.ipynb`, add:
+After running `training/openenv_hackathon_training_colab_grpo_only.ipynb`, add:
 
 - Reward distribution plot: `docs/plots/reward_distribution_baseline_vs_trained.png`
 - Correctness curve plot: `docs/plots/correctness_baseline_vs_trained.png`
@@ -84,11 +84,11 @@ After running `training/openenv_hackathon_training.ipynb`, add:
 Fill these links before final submission:
 
 - **HF Space (environment URL judges will pull):** `TODO_ADD_HF_SPACE_URL`
-- **Training notebook (repo link):** `training/openenv_hackathon_training.ipynb`
+- **Training notebook (repo link):** `training/openenv_hackathon_training_colab_grpo_only.ipynb`
 - **Public Colab notebook (optional but recommended):** `TODO_ADD_COLAB_NOTEBOOK_URL`
 - **W&B run (or equivalent training evidence):** `TODO_ADD_WANDB_RUN_URL`
 - **Short writeup/video/slides (<2 min video or mini blog):** `TODO_ADD_STORY_URL`
-- **Hugging Face blog post markdown path in repo (if used):** `TODO_ADD_BLOG_MARKDOWN_PATH`
+- **Hugging Face blog post markdown path in repo (if used):** `HF_BLOG_WRITEUP.md`
 
 ## Submission Checklist (Final)
 
@@ -102,11 +102,11 @@ Fill these links before final submission:
 
 ### Notebook and Reproducibility
 
-- [ ] `training/openenv_hackathon_training.ipynb` runs end-to-end without errors
+- [ ] `training/openenv_hackathon_training_colab_grpo_only.ipynb` runs end-to-end without errors
 - [ ] Notebook execution produces visible output cells for metrics and plots
 - [ ] Notebook includes/prints final summary metrics (baseline vs trained)
 - [ ] Share at least one runnable training entry:
-  - [ ] Repo notebook link (`training/openenv_hackathon_training.ipynb`), or
+  - [ ] Repo notebook link (`training/openenv_hackathon_training_colab_grpo_only.ipynb`), or
   - [ ] Public Google Colab link
 
 ### Plots and Evidence Quality
